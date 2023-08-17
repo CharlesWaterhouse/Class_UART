@@ -77,13 +77,11 @@ void UART::UartISR() {
 			*uart_data_ = c;
 		} else {
 			transmit_state_ = 0;
-		}
-		
-		if (callback_transmit_finish_) {
-			callback_transmit_finish_();
+			if (callback_transmit_finish_) {
+				callback_transmit_finish_();
+			}
 		}
 	}
-
 }
 
 bool UART::HasRecieveData() {
