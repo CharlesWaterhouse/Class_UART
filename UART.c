@@ -1,151 +1,127 @@
 
 
-
-
 class UART {
-public:
-	UART(const int baud_rate, const int buffer_size);
-	bool CheckParityError(); //by specificify register (look at datasheet)
-	bool CheckOverflowError(); //by specificify register (look at datasheet)		
-	
-	// run after receieve any data(include the date beause of transmit)
-	void UartISR();
-	
-	
-	bool IsReadyToSend();
-	void SendCharBlocking(const char c);
-	void SendCharNonblocking(const char c);
-	void FlushTransmitBuffer();
-	bool hasRecieveData();
-	char GetRecieveData();
-	
 private:
-
-	//need a physics address(look at datasheet), assign it will trigger someting hardware action.
-	uint8_t *uart_data_register_;  
+	//a physical address, look at ic datasheet
+	//assign it will trigger certain hardware action to send it. After finishing the sending, uart will trigger UartISR;
+	//also store the receive_date in this
+	uint8_t *uart_data_; 
 	
-	//it will be set 1 by hardware beacuse of there are some data in uart_data_register_
-	uint8_t *uart_recieve_interrupt_flag_;   
+	//it will be assign 1 by hardware, beacause of there is now data comein. Clear to 0 by user.
+	uint8_t *uart_receive_interrupt_flag_;
 	
-	//it will be set to 1 by hardware when uart_data_register_ is written by user
-	uint8_t *uart_transmit_interrupt_flag_;  
-	
+	//it will be assign 1 by hardware when finished the transmit. Clear to 0 by user.
+	uint8_t *uart_transmit_finish_intrrupt_flag_;
 	
 	int baud_rate_;
 	
-	string receieve_buffer_;
-	int next_buffer_index_;
-	int unprocess_recieve_data_num_ = 0;
-	void (*callback_receive_) ();
+	queue<char> receive_buffer_;
+	void (*callback_receive_)();
 	
+	int transmit_state_; //0<ready> 1<transmit>
 	queue<char> transmit_buffer_;
-	void (*callback_transmitFinish_) ();
-}
-
-
-UART::UART(const int baud_rate, const int buffer_size) {
-	uart_data_register_ = 0x01; //need a physics address(look at datasheet)
-	uart_recieve_interrupt_flag_ = 0x02; //need a physics address(look at datasheet)
-	uart_transmit_interrupt_flag_ = 0x03; //need a physics address(look at datasheet)
+	void (*callback_transmit_finish_)();
 	
-	baud_rate_ = baud_rate;	
+public:
+	UART(int baud_rate);
+	bool CheckParityError(); //by hardware
+	bool CheckOverflowError(); //byhardware
+
+	void UartISR();
+
+	bool HasRecieveData();
+	char GetRecieveChar();
+
+	bool IsTransmitIdle();
+	void SendCharBlocking(const char c);
+	void SendCharNonBlocking(const char c);
+	void FlushTransmitBuffer();
 	
-	receieve_buffer_.resize(buffer_size);
-	next_buffer_index_ = 0;
-	has_recieve_data_ = 0;
+};
+
+UART::UART(int baud_rate) {
+	uart_data_ = 0x01;
+	uart_receive_interrupt_flag_ = 0x02;
+	uart_transmit_finish_intrrupt_flag_ = 0x03;
+	
+	baud_rate_ = baud_rate;
+	
+	receive_buffer_.clear();
 	callback_receive_ = nullptr;
 	
-	callback_transmitFinish_ = nullptr;
+	transmit_state_ = 0;
+	transmit_buffer_.clear();
+	callback_transmit_finish_ = nullptr;
+	
+	
+	//set tx pin
+	//set rx pin
+	//set uart mode
+	//set enable for receive
+	//set interrupt enable for uart
 }
 
 void UART::UartISR() {
-	if (*uart_recieve_interrupt_flag_) {
-		*uart_recieve_interrupt_flag_ = 0;            
-		
-		receieve_buffer_[next_buffer_index_] = *uart_data_register_;
-		next_buffer_index_++;
-		
-		if (next_buffer_index_ >= receieve_buffer_.size()) {
-			next_buffer_index_ = 0;
-		}
-		unprocess_recieve_data_num_++;
+	if (*uart_receive_interrupt_flag_ == 1) {
+		*uart_receive_interrupt_flag_ = 0;
+		receive_buffer_.push(*uart_data_);
 		if (callback_receive_) {
 			callback_receive_();
 		}
 	}
-
-	if (*uart_transmit_interrupt_flag_) {
-		*uart_transmit_interrupt_flag_ = 0;
-
-		if (!transmitBuffer_.empty()) {
-			const char nextChar = transmitBuffer_.front();
-			transmitBuffer_.pop();
-			*uart_data_register_ = nextChar;
+	if (*uart_transmit_finish_intrrupt_flag_ == 1) {
+		*uart_transmit_finish_intrrupt_flag_ = 0;
+		if (transmit_buffer_.size() > 0) {
+			const char c = transmit_buffer_.front();
+			transmit_buffer_.pop();
+			*uart_data_ = c;
 		} else {
-			if (transmitCompleteCallback) {
-				transmitCompleteCallback();
-			}
+			transmit_state_ = 0;
+		}
+		
+		if (callback_transmit_finish_) {
+			callback_transmit_finish_();
 		}
 	}
-}
-	
-bool UART::IsReadyToSend() {
-	return (*uart_transmit_interrupt_flag) > 0;
+
 }
 
+bool UART::HasRecieveData() {
+	return receive_buffer_.size() > 0;
+}
+char UART::GetRecieveChar() {
+	if (receive_buffer_.size() == 0) {
+		return 0;
+	}
+	const char c = receive_buffer_.front();
+	receive_buffer_.pop();
+	return c;
+}
+
+bool UART::IsTransmitIdle() {
+	return transmit_state_ == 0;
+}
 void UART::SendCharBlocking(const char c) {
-	while (!IsReadyToSend()) {
+	while (!IsTransmitIdle()) {
 		;
 	}
-	
-	*uart_data_register_ = c;
-	
-	while (!IsReadyToSend()) {
+	transmit_state_ = 1;
+	*uart_data_ = c;
+	while (!IsTransmitIdle()) {
 		;
-	}		
+	}	
 }
-
-void UART::SendCharNonblocking(const char c) {
-	if (transmitBuffer_.empty() && IsReadyToSend()) {
-		*uart_data_register_ = c;
-	} else {
+void UART::SendCharNonBlocking(const char c) {
+	if (IsTransmitIdle()) {
 		transmit_buffer_.push(c);
+	} else {
+		transmit_state_ = 1;
+		*uart_data_ = c;
 	}
 }
-
 void UART::FlushTransmitBuffer() {
-    while (!transmit_buffer_.empty()) {
-        transmit_buffer_.pop();
-    }
-}
-
-bool UART::hasRecieveData() {
-	return unprocess_recieve_data_num_ > 0;
-}
-
-char UART::GetRecieveData() {
-	unprocess_recieve_data_num_ = 0;
-	const int last_index = next_buffer_index_ - 1; 
-	if (last_index < 0) {
-		return receieve_buffer_.back();
-	}
-	return receieve_buffer_[last_index];
+	transmit_buffer_.clear();
 }
 
 
 
-
-
-UART g_uart(9600, 20);
-
-//-----------------------------------------------------------------------------
-//  UART0 ISR
-//-----------------------------------------------------------------------------
-void UART0_ISR(void) interrupt ISRUart  // Vector @  0x23
-{
-    g_uart.UartISR();
-}
-
-
-// enable UART0_ISR
-#define _UART0_INTERRUPT_ENABLE				IEN0 |= 0x10;
