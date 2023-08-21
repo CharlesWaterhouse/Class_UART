@@ -51,3 +51,28 @@ void IinitalUart() {
 }
 
 
+
+
+
+void USART1_IRQHandler() {
+	OS_ENTER_CRITICAL();                         /* Tell uC/OS-II that we are starting an ISR          */
+	OSIntEnter();
+
+	if (__HAL_UART_GET_IT(&UartHandleCAN, UART_IT_RXNE) != RESET) {
+		u16 data;
+		data = LL_LPUART_ReceiveData8(UartHandleCAN.Instance);
+		//do something.
+		
+	} else {
+		//finish transmitting or there is some error occurs in uart module.
+		LL_USART_ClearFlag_ORE(UartHandleCAN.Instance);
+		LL_LPUART_ReceiveData8(UartHandleCAN.Instance);	
+	}
+
+
+	OS_EXIT_CRITICAL();
+	OSIntExit();             /* Tell uC/OS-II that we are leaving the ISR */
+}
+
+
+
